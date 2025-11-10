@@ -18,7 +18,7 @@ MarketOfferList IOMarket::getActiveOffers(MarketAction_t action, uint16_t itemId
 {
 	MarketOfferList offerList;
 
-	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `amount`, `price`, `created`, `anonymous`, (SELECT `name` FROM `players` WHERE `id` = `player_id`) AS `player_name` FROM `market_offers` WHERE `sale` = {:d} AND `itemtype` = {:d}", tfs::to_underlying(action), itemId));
+	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `amount`, `price`, `created`, `anonymous`, `description`, `attributes`, (SELECT `name` FROM `players` WHERE `id` = `player_id`) AS `player_name` FROM `market_offers` WHERE `sale` = {:d} AND `itemtype` = {:d}", tfs::to_underlying(action), itemId));
 	if (!result) {
 		return offerList;
 	}
@@ -36,6 +36,13 @@ MarketOfferList IOMarket::getActiveOffers(MarketAction_t action, uint16_t itemId
 		} else {
 			offer.playerName = "Anonymous";
 		}
+		unsigned long attrSize;
+		offer.description = result->getString("description");
+		const char* attr = result->getStream("attributes", attrSize);
+		PropStream propStream;
+		propStream.init(attr, attrSize);
+		offer.attr = attr;
+		offer.attrSize = attrSize;
 		offerList.push_back(offer);
 	} while (result->next());
 	return offerList;
@@ -47,7 +54,7 @@ MarketOfferList IOMarket::getOwnOffers(MarketAction_t action, uint32_t playerId)
 
 	const int32_t marketOfferDuration = g_config.getNumber(ConfigManager::MARKET_OFFER_DURATION);
 
-	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `amount`, `price`, `created`, `itemtype` FROM `market_offers` WHERE `player_id` = {:d} AND `sale` = {:d}", playerId, tfs::to_underlying(action)));
+	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `amount`, `price`, `created`, `itemtype`, `description` FROM `market_offers` WHERE `player_id` = {:d} AND `sale` = {:d}", playerId, tfs::to_underlying(action)));
 	if (!result) {
 		return offerList;
 	}
@@ -59,6 +66,7 @@ MarketOfferList IOMarket::getOwnOffers(MarketAction_t action, uint32_t playerId)
 		offer.timestamp = result->getNumber<uint32_t>("created") + marketOfferDuration;
 		offer.counter = result->getNumber<uint32_t>("id") & 0xFFFF;
 		offer.itemId = result->getNumber<uint16_t>("itemtype");
+		offer.description = result->getString("description");
 		offerList.push_back(offer);
 	} while (result->next());
 	return offerList;
@@ -105,6 +113,11 @@ void IOMarket::processExpiredOffers(DBResult_ptr result, bool)
 
 		const uint32_t playerId = result->getNumber<uint32_t>("player_id");
 		const uint16_t amount = result->getNumber<uint16_t>("amount");
+		unsigned long attrSize;
+		std::string description = result->getString("description");
+		const char* attr = result->getStream("attributes", attrSize);
+		PropStream propStream;
+		propStream.init(attr, attrSize);
 		if (result->getNumber<uint16_t>("sale") == 1) {
 			const ItemType& itemType = Item::items[result->getNumber<uint16_t>("itemtype")];
 			if (itemType.id == 0) {
@@ -146,6 +159,9 @@ void IOMarket::processExpiredOffers(DBResult_ptr result, bool)
 						delete item;
 						break;
 					}
+					 if (!item->unserializeAttr(propStream)) {
+						 std::cout << "WARNING: Serialize error in IOMarket::processExpiredOffers" << std::endl;
+					 }
 				}
 			}
 
@@ -170,7 +186,7 @@ void IOMarket::checkExpiredOffers()
 {
 	const time_t lastExpireDate = time(nullptr) - g_config.getNumber(ConfigManager::MARKET_OFFER_DURATION);
 
-	g_databaseTasks.addTask(fmt::format("SELECT `id`, `amount`, `price`, `itemtype`, `player_id`, `sale` FROM `market_offers` WHERE `created` <= {:d}", lastExpireDate), IOMarket::processExpiredOffers, true);
+	g_databaseTasks.addTask(fmt::format("SELECT `id`, `amount`, `price`, `itemtype`, `player_id`, `sale`, `description`, `attributes` FROM `market_offers` WHERE `created` <= {:d}", lastExpireDate), IOMarket::processExpiredOffers, true);
 
 	int32_t checkExpiredMarketOffersEachMinutes = g_config.getNumber(ConfigManager::CHECK_EXPIRED_MARKET_OFFERS_EACH_MINUTES);
 	if (checkExpiredMarketOffersEachMinutes <= 0) {
@@ -195,13 +211,20 @@ MarketOfferEx IOMarket::getOfferByCounter(uint32_t timestamp, uint16_t counter)
 
 	const int32_t created = timestamp - g_config.getNumber(ConfigManager::MARKET_OFFER_DURATION);
 
-	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `sale`, `itemtype`, `amount`, `created`, `price`, `player_id`, `anonymous`, (SELECT `name` FROM `players` WHERE `id` = `player_id`) AS `player_name` FROM `market_offers` WHERE `created` = {:d} AND (`id` & 65535) = {:d} LIMIT 1", created, counter));
+	DBResult_ptr result = Database::getInstance().storeQuery(fmt::format("SELECT `id`, `sale`, `itemtype`, `amount`, `created`, `price`, `player_id`, `anonymous`, `description`, `attributes`, (SELECT `name` FROM `players` WHERE `id` = `player_id`) AS `player_name` FROM `market_offers` WHERE `created` = {:d} AND (`id` & 65535) = {:d} LIMIT 1", created, counter));
 	if (!result) {
 		offer.id = 0;
 		offer.playerId = 0;
 		return offer;
 	}
-
+	unsigned long attrSize;
+	offer.description = result->getString("description");
+	const char* attr = result->getStream("attributes", attrSize);
+	PropStream propStream;
+	propStream.init(attr, attrSize); 
+	
+	offer.attr = attr;
+	offer.attrSize = attrSize;
 	offer.id = result->getNumber<uint32_t>("id");
 	offer.type = static_cast<MarketAction_t>(result->getNumber<uint16_t>("sale"));
 	offer.amount = result->getNumber<uint16_t>("amount");
@@ -218,10 +241,14 @@ MarketOfferEx IOMarket::getOfferByCounter(uint32_t timestamp, uint16_t counter)
 	return offer;
 }
 
-void IOMarket::createOffer(uint32_t playerId, MarketAction_t action, uint32_t itemId, uint16_t amount, uint32_t price, bool anonymous)
-{
-	Database::getInstance().executeQuery(fmt::format("INSERT INTO `market_offers` (`player_id`, `sale`, `itemtype`, `amount`, `price`, `created`, `anonymous`) VALUES ({:d}, {:d}, {:d}, {:d}, {:d}, {:d}, {:d})", playerId, tfs::to_underlying(action), itemId, amount, price, time(nullptr), anonymous));
-}
+ void IOMarket::createOffer(uint32_t playerId, MarketAction_t action, uint32_t itemId, uint16_t amount, uint32_t price, bool anonymous, std::string description, size_t attributesSize, const char* attributes)
+ {
+	 if (attributesSize == 0 && attributes == nullptr) {
+		 	Database::getInstance().executeQuery(fmt::format("INSERT INTO `market_offers` (`player_id`, `sale`, `itemtype`, `amount`, `price`, `created`, `anonymous`, `description`, `attributes`) VALUES ({:d}, {:d}, {:d}, {:d}, {:d}, {:d}, {:d}, {:s}, {:s})", playerId, tfs::to_underlying(action), itemId, amount, price, time(nullptr), anonymous, Database::getInstance().escapeString(description), Database::getInstance().escapeBlob(attributes, attributesSize)));
+	 } else {
+		 Database::getInstance().executeQuery(fmt::format("INSERT INTO `market_offers` (`player_id`, `sale`, `itemtype`, `amount`, `price`, `created`, `anonymous`, `description`, `attributes`) VALUES ({:d}, {:d}, {:d}, {:d}, {:d}, {:d}, {:d}, {:s}, {:s})", playerId, tfs::to_underlying(action), itemId, amount, price, time(nullptr), anonymous, Database::getInstance().escapeString(description), Database::getInstance().escapeBlob(attributes, attributesSize)));
+	 }
+ }
 
 void IOMarket::acceptOffer(uint32_t offerId, uint16_t amount)
 {

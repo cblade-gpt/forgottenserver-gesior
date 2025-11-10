@@ -6,6 +6,7 @@
 
 #include "enums.h"
 #include "database.h"
+ #include "player.h"
 
 class IOMarket
 {
@@ -25,7 +26,7 @@ class IOMarket
 		static uint32_t getPlayerOfferCount(uint32_t playerId);
 		static MarketOfferEx getOfferByCounter(uint32_t timestamp, uint16_t counter);
 
-		static void createOffer(uint32_t playerId, MarketAction_t action, uint32_t itemId, uint16_t amount, uint32_t price, bool anonymous);
+		static void createOffer(uint32_t playerId, MarketAction_t action, uint32_t itemId, uint16_t amount, uint32_t price, bool anonymous, std::string description, size_t attributesSize, const char* attributes);
 		static void acceptOffer(uint32_t offerId, uint16_t amount);
 		static void deleteOffer(uint32_t offerId);
 

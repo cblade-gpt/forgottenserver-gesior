@@ -5126,8 +5126,9 @@ void Game::playerBrowseMarketOwnHistory(uint32_t playerId)
 	player->sendMarketBrowseOwnHistory(buyOffers, sellOffers);
 }
 
-void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spriteId, uint16_t amount, uint32_t price, bool anonymous)
+void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spriteId, uint32_t uid, uint16_t amount, uint64_t price, bool anonymous)
 {
+	bool delayed = false;
 	if (amount == 0 || amount > 64000) {
 		return;
 	}
@@ -5164,7 +5165,7 @@ void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spr
 		return;
 	}
 
-	if (!it.stackable && amount > 2000) {
+	if (!it.stackable && amount > 1) {
 		return;
 	}
 
@@ -5190,7 +5191,7 @@ void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spr
 			return;
 		}
 
-		std::forward_list<Item*> itemList = getMarketItemList(it.wareId, amount, depotChest, player->getInbox());
+		std::forward_list<Item*> itemList = getMarketItemList(it.clientId, amount, depotChest, player->getInbox());
 		if (itemList.empty()) {
 			return;
 		}
@@ -5207,9 +5208,8 @@ void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spr
 				}
 			}
 		} else {
-			for (Item* item : itemList) {
-				internalRemoveItem(item);
-			}
+			 delayed = true; // must be delayed to save attributes first before removing
+			 amount = 1; // for non stackable items because we will treat items uniquely that are non stackable.
 		}
 
 		const auto debitCash = std::min(player->getMoney(), fee);
@@ -5229,8 +5229,34 @@ void Game::playerCreateMarketOffer(uint32_t playerId, uint8_t type, uint16_t spr
 		player->bankBalance -= debitBank;
 	}
 
-	IOMarket::createOffer(player->getGUID(), static_cast<MarketAction_t>(type), it.id, amount, price, anonymous);
-
+	if (MarketAction_t::MARKETACTION_BUY == type) {
+		IOMarket::createOffer(player->getGUID(), static_cast<MarketAction_t>(type), it.id, amount, price, anonymous, "", 0, nullptr); 
+	} else {
+		 DepotChest* depotChest = player->getDepotChest(player->getLastDepotId(), false);
+		 if (!depotChest) {	
+			 return;
+		 }
+		 Item* item = nullptr;
+		 for (Item* it : depotChest->getItemList()) {	
+			 if (it->getRealUID() == uid) {
+				 item = it;
+				 break;
+			 }
+		 }
+		 
+		 if (item) {
+			 if(item->hasAnyAttributes()) {
+				 PropWriteStream propWriteStream;
+				 item->serializeAttr(propWriteStream);
+				 size_t attributesSize;
+				 const char* attributes = propWriteStream.getStream(attributesSize);
+				 IOMarket::createOffer(player->getGUID(), static_cast<MarketAction_t>(type), it.id, amount, price, anonymous, item->getDescription(0), attributesSize, attributes); //attributes SAVED with offer
+			 } else {
+				 IOMarket::createOffer(player->getGUID(), static_cast<MarketAction_t>(type), it.id, amount, price, anonymous, item->getDescription(0), 0, nullptr); //attributes NOT SAVED with offer
+			 }
+			 internalRemoveItem(item);
+		 }
+	}
 	player->sendMarketEnter(player->getLastDepotId());
 	const MarketOfferList& buyOffers = IOMarket::getActiveOffers(MARKETACTION_BUY, it.id);
 	const MarketOfferList& sellOffers = IOMarket::getActiveOffers(MARKETACTION_SELL, it.id);

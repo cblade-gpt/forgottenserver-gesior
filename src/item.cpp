@@ -1833,6 +1833,15 @@ bool Item::hasMarketAttributes() const
 	return true;
 }
 
+bool Item::hasAnyAttributes() const
+{
+	if (attributes == nullptr) {
+		return false;
+	}
+
+	return true;
+}
+
 template<>
 const std::string& ItemAttributes::CustomAttribute::get<std::string>() {
 	if (value.type() == typeid(std::string)) {

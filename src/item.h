@@ -983,6 +983,7 @@ class Item : virtual public Thing
 		}
 
 		bool hasMarketAttributes() const;
+		bool hasAnyAttributes() const;
 
 		std::unique_ptr<ItemAttributes>& getAttributes() {
 			if (!attributes) {

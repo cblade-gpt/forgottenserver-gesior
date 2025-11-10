@@ -1186,10 +1186,11 @@ void ProtocolGame::parseMarketCreateOffer(NetworkMessage& msg)
 {
 	uint8_t type = msg.getByte();
 	uint16_t spriteId = msg.get<uint16_t>();
+	uint32_t uid = msg.get<uint32_t>();	
 	uint16_t amount = msg.get<uint16_t>();
-	uint32_t price = msg.get<uint32_t>();
+	uint64_t price = msg.get<uint64_t>();
 	bool anonymous = (msg.getByte() != 0);
-	addGameTask(&Game::playerCreateMarketOffer, player->getID(), type, spriteId, amount, price, anonymous);
+	addGameTask(&Game::playerCreateMarketOffer, player->getID(), type, spriteId, uid, amount, price, anonymous);
 }
 
 void ProtocolGame::parseMarketCancelOffer(NetworkMessage& msg)
@@ -1676,7 +1677,7 @@ void ProtocolGame::sendMarketEnter(uint32_t depotId)
 	NetworkMessage msg;
 	msg.addByte(0xF6);
 
-	msg.add<uint64_t>(player->getBankBalance());
+	msg.add<uint64_t>(static_cast<uint64_t>(player->getBankBalance()));
 	msg.addByte(std::min<uint32_t>(IOMarket::getPlayerOfferCount(player->getGUID()), std::numeric_limits<uint8_t>::max()));
 
 	DepotChest* depotChest = player->getDepotChest(depotId, false);
@@ -1689,6 +1690,8 @@ void ProtocolGame::sendMarketEnter(uint32_t depotId)
 	player->setInMarket(true);
 
 	std::map<uint16_t, uint32_t> depotItems;
+	std::map<uint16_t, uint32_t> depotUids;
+	std::map<uint16_t, std::string> depotDescription;
 	std::forward_list<Container*> containerList { depotChest, player->getInbox() };
 
 	do {
@@ -1716,6 +1719,8 @@ void ProtocolGame::sendMarketEnter(uint32_t depotId)
 			}
 
 			depotItems[itemType.wareId] += Item::countByType(item, -1);
+			depotUids[itemType.clientId] = item->getRealUID();
+			depotDescription[itemType.clientId] = item->getDescription(0);
 		}
 	} while (!containerList.empty());
 
@@ -1726,6 +1731,8 @@ void ProtocolGame::sendMarketEnter(uint32_t depotId)
 	for (std::map<uint16_t, uint32_t>::const_iterator it = depotItems.begin(); i < itemsToSend; ++it, ++i) {
 		msg.add<uint16_t>(it->first);
 		msg.add<uint16_t>(std::min<uint32_t>(0xFFFF, it->second));
+		msg.add<uint32_t>(depotUids[it->first]);
+		msg.addString(depotDescription[it->first]); // description for owned items in depot
 	}
 
 	writeToOutputBuffer(msg);
@@ -1752,6 +1759,7 @@ void ProtocolGame::sendMarketBrowseItem(uint16_t itemId, const MarketOfferList& 
 		msg.add<uint16_t>(offer.amount);
 		msg.add<uint32_t>(offer.price);
 		msg.addString(offer.playerName);
+		msg.addString(offer.description);
 	}
 
 	msg.add<uint32_t>(sellOffers.size());
@@ -1759,8 +1767,9 @@ void ProtocolGame::sendMarketBrowseItem(uint16_t itemId, const MarketOfferList& 
 		msg.add<uint32_t>(offer.timestamp);
 		msg.add<uint16_t>(offer.counter);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
-		msg.addString(offer.playerName);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
+		msg.addString(offer.playerName);	
+		msg.addString(offer.description);
 	}
 
 	writeToOutputBuffer(msg);
@@ -1777,8 +1786,9 @@ void ProtocolGame::sendMarketAcceptOffer(const MarketOfferEx& offer)
 		msg.add<uint32_t>(offer.timestamp);
 		msg.add<uint16_t>(offer.counter);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
 		msg.addString(offer.playerName);
+		msg.addString(offer.description);
 		msg.add<uint32_t>(0x00);
 	} else {
 		msg.add<uint32_t>(0x00);
@@ -1786,8 +1796,9 @@ void ProtocolGame::sendMarketAcceptOffer(const MarketOfferEx& offer)
 		msg.add<uint32_t>(offer.timestamp);
 		msg.add<uint16_t>(offer.counter);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
 		msg.addString(offer.playerName);
+		msg.addString(offer.description);
 	}
 
 	writeToOutputBuffer(msg);
@@ -1805,7 +1816,8 @@ void ProtocolGame::sendMarketBrowseOwnOffers(const MarketOfferList& buyOffers, c
 		msg.add<uint16_t>(offer.counter);
 		msg.addItemId(offer.itemId);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
+		msg.addString(offer.description);
 	}
 
 	msg.add<uint32_t>(sellOffers.size());
@@ -1814,7 +1826,8 @@ void ProtocolGame::sendMarketBrowseOwnOffers(const MarketOfferList& buyOffers, c
 		msg.add<uint16_t>(offer.counter);
 		msg.addItemId(offer.itemId);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
+		msg.addString(offer.description);
 	}
 
 	writeToOutputBuffer(msg);
@@ -1832,7 +1845,8 @@ void ProtocolGame::sendMarketCancelOffer(const MarketOfferEx& offer)
 		msg.add<uint16_t>(offer.counter);
 		msg.addItemId(offer.itemId);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
+		msg.addString(offer.description);
 		msg.add<uint32_t>(0x00);
 	} else {
 		msg.add<uint32_t>(0x00);
@@ -1841,7 +1855,8 @@ void ProtocolGame::sendMarketCancelOffer(const MarketOfferEx& offer)
 		msg.add<uint16_t>(offer.counter);
 		msg.addItemId(offer.itemId);
 		msg.add<uint16_t>(offer.amount);
-		msg.add<uint32_t>(offer.price);
+		msg.add<uint64_t>(static_cast<uint64_t>(offer.price));
+		msg.addString(offer.description);
 	}
 
 	writeToOutputBuffer(msg);
@@ -1864,7 +1879,7 @@ void ProtocolGame::sendMarketBrowseOwnHistory(const HistoryMarketOfferList& buyO
 		msg.add<uint16_t>(counterMap[it->timestamp]++);
 		msg.addItemId(it->itemId);
 		msg.add<uint16_t>(it->amount);
-		msg.add<uint32_t>(it->price);
+		msg.add<uint64_t>(static_cast<uint64_t>(it->price));
 		msg.addByte(it->state);
 	}
 
@@ -1877,7 +1892,7 @@ void ProtocolGame::sendMarketBrowseOwnHistory(const HistoryMarketOfferList& buyO
 		msg.add<uint16_t>(counterMap[it->timestamp]++);
 		msg.addItemId(it->itemId);
 		msg.add<uint16_t>(it->amount);
-		msg.add<uint32_t>(it->price);
+		msg.add<uint64_t>(static_cast<uint64_t>(it->price));
 		msg.addByte(it->state);
 	}
 
@@ -2062,9 +2077,9 @@ void ProtocolGame::sendMarketDetail(uint16_t itemId)
 	if (statistics) {
 		msg.addByte(0x01);
 		msg.add<uint32_t>(statistics->numTransactions);
-		msg.add<uint32_t>(std::min<uint64_t>(std::numeric_limits<uint32_t>::max(), statistics->totalPrice));
-		msg.add<uint32_t>(statistics->highestPrice);
-		msg.add<uint32_t>(statistics->lowestPrice);
+		msg.add<uint64_t>(static_cast<uint64_t>(std::min<uint64_t>(std::numeric_limits<uint32_t>::max(), statistics->totalPrice)));
+		msg.add<uint64_t>(static_cast<uint64_t>(statistics->highestPrice));
+		msg.add<uint64_t>(static_cast<uint64_t>(statistics->lowestPrice));
 	} else {
 		msg.addByte(0x00);
 	}
@@ -2073,9 +2088,9 @@ void ProtocolGame::sendMarketDetail(uint16_t itemId)
 	if (statistics) {
 		msg.addByte(0x01);
 		msg.add<uint32_t>(statistics->numTransactions);
-		msg.add<uint32_t>(std::min<uint64_t>(std::numeric_limits<uint32_t>::max(), statistics->totalPrice));
-		msg.add<uint32_t>(statistics->highestPrice);
-		msg.add<uint32_t>(statistics->lowestPrice);
+		msg.add<uint64_t>(static_cast<uint64_t>(std::min<uint64_t>(std::numeric_limits<uint32_t>::max(), statistics->totalPrice)));
+		msg.add<uint64_t>(static_cast<uint64_t>(statistics->highestPrice));
+		msg.add<uint64_t>(static_cast<uint64_t>(statistics->lowestPrice));
 	} else {
 		msg.addByte(0x00);
 	}
